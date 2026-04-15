@@ -98,7 +98,8 @@ typings/
 /ghost/core/content/adapters/scheduling/**/*
 /ghost/core/content/themes/casper
 /ghost/core/content/themes/source
-!/ghost/core/content/themes/mevkh-theme
+# mevkh-theme is a plain git clone (not submodule — Ghost's pre-commit hook
+# blocks submodule additions). Set up via: scripts/setup-mevkh-theme.sh
 !/ghost/core/README.md
 !/ghost/core/content/**/README.md
 
