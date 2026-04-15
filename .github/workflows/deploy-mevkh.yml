@@ -1,0 +1,118 @@
+name: Deploy Ghost core to production (mevkh.com)
+
+# Manual only — core deploys involve DB migrations and service restart, so we
+# want explicit human intent, not push-triggered. For theme changes, see the
+# separate mevkh-theme repo's workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or tag to deploy (default: mevkh)'
+        required: true
+        default: 'mevkh'
+      run_migrations:
+        description: 'Run knex-migrator migrate after install/build'
+        required: true
+        type: boolean
+        default: true
+      skip_build:
+        description: 'Skip pnpm build:production (only safe for config-only changes)'
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: ghost-core-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.ref }} to VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Sanity-check inputs
+        run: |
+          echo "Deploying ref: ${{ inputs.ref }}"
+          echo "Run migrations: ${{ inputs.run_migrations }}"
+          echo "Skip build: ${{ inputs.skip_build }}"
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy core on VPS
+        env:
+          REF: ${{ inputs.ref }}
+          RUN_MIGRATIONS: ${{ inputs.run_migrations }}
+          SKIP_BUILD: ${{ inputs.skip_build }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            "REF='$REF' RUN_MIGRATIONS='$RUN_MIGRATIONS' SKIP_BUILD='$SKIP_BUILD' bash -s" << 'REMOTE'
+            set -euo pipefail
+            export PATH=/home/ghost/.local/bin:$PATH
+            cd /home/ghost/ghost-src
+
+            echo "::group::Before"
+            git log --oneline -1
+            echo "::endgroup::"
+
+            echo "::group::Fetch + checkout $REF"
+            git fetch origin --prune
+            git checkout "$REF"
+            git reset --hard "origin/$REF"
+            git log --oneline -3
+            echo "::endgroup::"
+
+            echo "::group::Install dependencies"
+            pnpm install --frozen-lockfile
+            echo "::endgroup::"
+
+            if [ "$SKIP_BUILD" != "true" ]; then
+              echo "::group::Build production"
+              pnpm build:production
+              echo "::endgroup::"
+            else
+              echo "::notice::Skipping build (skip_build=true)"
+            fi
+
+            if [ "$RUN_MIGRATIONS" = "true" ]; then
+              echo "::group::Run migrations"
+              cd ghost/core
+              pnpm knex-migrator migrate
+              cd -
+              echo "::endgroup::"
+            else
+              echo "::notice::Skipping migrations (run_migrations=false)"
+            fi
+
+            echo "::group::Restart Ghost"
+            sudo systemctl restart ghost
+            sleep 3
+            sudo systemctl is-active ghost
+            echo "::endgroup::"
+          REMOTE
+
+      - name: Smoke test production
+        run: |
+          # Give Ghost a moment to fully boot
+          for i in 1 2 3 4 5; do
+            STATUS=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://mevkh.com/ || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "::notice::Production returned HTTP 200 after deploy"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Production did not return 200 after 5 attempts"
+          exit 1
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
