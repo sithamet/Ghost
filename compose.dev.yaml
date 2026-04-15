@@ -110,7 +110,8 @@ services:
     container_name: ghost-dev-gateway
     ports:
       - "2368:80"
-      - "80:80"
+      # mevkh fork: removed "80:80" binding — conflicts with other local services
+      # (SSH tunnels, other project Caddys). Access Ghost via localhost:2368.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

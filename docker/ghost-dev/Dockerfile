@@ -34,8 +34,10 @@ COPY .github/hooks .github/hooks
 RUN corepack enable
 
 # Install deps with a persistent pnpm store cache to speed up rebuilds
+# NOTE (mevkh fork): upstream commit 64055e7f35 removed .github/scripts/install-deps.sh
+# but left this Dockerfile referencing it. Inline the equivalent pnpm command.
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store,id=pnpm-store \
-    bash .github/scripts/install-deps.sh
+    pnpm install --frozen-lockfile
 
 # Copy entrypoint script that optionally loads Tinybird config
 COPY docker/ghost-dev/entrypoint.sh entrypoint.sh
